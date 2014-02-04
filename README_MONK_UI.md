@@ -1,7 +1,7 @@
 Monk UI
 =======
 
-Monk UI is a theme for [MonkDev](http://monkdev.com) apps built on [Bootstrap for Sass](https://github.com/twbs/bootstrap-sass).
+UI theme for [MonkDev](http://monkdev.com) apps built on [Bootstrap for Sass](https://github.com/twbs/bootstrap-sass).
 
 Usage
 -----
