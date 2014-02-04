@@ -1,0 +1,62 @@
+// Colors
+
+$blue-darker: #32475f;
+$blue-dark: #475a6f;
+$blue: #5b6c7f;
+$blue-light: #6c7b8c;
+$blue-lighter: #8d98a6;
+
+$blue-sky: #5496b7;
+
+$white: #fff;
+$offwhite: #dfdfdf;
+
+$brand-primary-light: lighten($brand-primary, 15%);
+
+// Overrides
+
+$body-bg: $blue-darker;
+$text-color: $offwhite;
+
+$link-color: $offwhite;
+
+$font-family-sans-serif: "myriad-pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+$border-radius-base: 0;
+$border-radius-large: 0;
+$border-radius-small: 0;
+
+$table-border-color: $blue-lighter;
+
+$btn-font-weight: bold;
+$btn-default-color: $offwhite;
+$btn-default-bg: $blue-lighter;
+$btn-default-border: $blue-light;
+$btn-primary-color: $blue-darker;
+$btn-primary-border: $brand-primary-light;
+
+$input-bg: $blue-lighter;
+$input-color: $white;
+$input-border: $blue-lighter;
+$input-border-focus: $offwhite;
+$input-group-addon-bg: $blue-light;
+
+$nav-link-padding: 5px 10px;
+
+$state-success-text: $offwhite;
+$state-success-bg: $blue-sky;
+$state-success-border: $state-success-bg;
+$state-info-text: $offwhite;
+$state-info-bg: $blue-light;
+$state-info-border: $state-info-bg;
+
+$alert-padding: 5px 10px;
+
+// Custom
+
+$narrow-gutter-width: 40px;
+
+$font-size-medium: floor(14px * 1.15);
+
+$nav-link-primary-bg: $brand-primary;
+$nav-link-primary-color: $body-bg;

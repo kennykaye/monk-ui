@@ -1,0 +1,153 @@
+body {
+  padding-top: $narrow-gutter-width / 2;
+}
+
+.container-narrow {
+  margin: 0 auto;
+  max-width: 500px;
+  @include clearfix();
+}
+
+.header {
+  margin-bottom: $narrow-gutter-width / 2;
+  position: relative;
+
+  > h1 {
+    margin-bottom: 0;
+    margin-top: 0;
+  }
+
+  > .nav {
+    position: absolute;
+    right: 0;
+    top: 2px;
+
+    > li > a {
+      background-color: $blue-dark;
+    }
+  }
+}
+
+.content {
+  background-color: $blue;
+
+  > .content-header {
+    @extend .page-header;
+
+    > h2 {
+      font-size: 24px;
+      margin: 0;
+    }
+  }
+
+  > .content-body {
+    padding: $narrow-gutter-width / 2;
+  }
+}
+
+.footer {
+  background-color: $blue-dark;
+  margin-top: 1px;
+  padding: 14px 10px;
+  padding-right: 0;
+  @include clearfix();
+
+  > * {
+    margin-bottom: 0;
+  }
+
+  > p {
+    color: $blue-lighter;
+    float: left;
+    padding: $nav-link-padding;
+
+    > a {
+      color: $blue-lighter;
+
+      &:hover,
+      &:focus {
+        color: $blue-light;
+        text-decoration: none;
+      }
+    }
+  }
+
+  > .nav {
+    float: right;
+
+    > li > a {
+      background-color: $blue;
+    }
+  }
+}
+
+.section-header {
+  font-size: $font-size-medium;
+  font-weight: bold;
+}
+
+.nav > li.primary > a {
+  background-color: $nav-link-primary-bg;
+  color: $nav-link-primary-color;
+
+  &:hover,
+  &:focus {
+    background-color: darken($nav-link-primary-bg, 8%);
+  }
+}
+
+.form-group-shelf {
+  background-color: $blue-light;
+  margin-top: 1px;
+  padding: $padding-small-vertical $padding-small-horizontal;
+  @include clearfix();
+}
+
+#error_explanation {
+  @extend .alert;
+  @extend .alert-danger;
+
+  > h2 {
+    font-size: $font-size-base;
+    line-height: $line-height-base;
+    margin-bottom: $padding-small-vertical;
+    margin-top: 0;
+  }
+}
+
+.field_with_errors {
+  @include form-control-validation($state-danger-text, $state-danger-text, $state-danger-bg);
+
+  .form-control {
+    @include box-shadow(none);
+
+    &:focus {
+      @include box-shadow(none);
+    }
+  }
+}
+
+@media (min-width: $screen-xs) {
+  body {
+    padding: $narrow-gutter-width 0;
+  }
+
+  .header {
+    margin-bottom: $narrow-gutter-width;
+
+    > .nav {
+      top: 5px;
+    }
+  }
+
+  .content {
+    > .content-header {
+      margin-bottom: -($narrow-gutter-width / 2);
+      padding: $line-height-computed ($narrow-gutter-width * 2);
+    }
+
+    > .content-body {
+      padding: $narrow-gutter-width ($narrow-gutter-width * 2);
+    }
+  }
+}

@@ -1,0 +1,56 @@
+// Buttons
+
+.btn {
+  border-bottom-width: 5px;
+  text-transform: uppercase;
+}
+
+// Forms
+
+label {
+  font-size: $font-size-medium;
+}
+
+.radio,
+.checkbox {
+  label {
+    font-size: $font-size-base;
+  }
+}
+
+.form-control {
+  @include box-shadow(none);
+
+  &:focus {
+    @include box-shadow(none);
+  }
+}
+
+.help-block {
+  color: $blue-lighter;
+}
+
+// Navs
+
+.nav-pills {
+  > li {
+    > a {
+      border-radius: 0;
+    }
+  }
+}
+
+// Type
+
+.page-header {
+  background-color: $blue-lighter;
+  border-bottom: none;
+  margin: 0;
+  padding: ($narrow-gutter-width / 4) ($narrow-gutter-width / 2);
+}
+
+@media (min-width: $screen-xs) {
+  .page-header {
+    padding: ($narrow-gutter-width / 2) $narrow-gutter-width;
+  }
+}
