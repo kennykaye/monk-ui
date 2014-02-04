@@ -1,4 +1,27 @@
+// Monk UI variables must come first to override Boostrap variables.
 @import "monk-ui/variables";
-@import "bootstrap";
+
+// Only the Bootstrap components used by Monk UI.
+@import "bootstrap/variables";
+@import "bootstrap/mixins";
+@import "bootstrap/normalize";
+@import "bootstrap/print";
+@import "bootstrap/scaffolding";
+@import "bootstrap/type";
+@import "bootstrap/grid";
+@import "bootstrap/tables";
+@import "bootstrap/forms";
+@import "bootstrap/buttons";
+@import "bootstrap/component-animations";
+@import "bootstrap/glyphicons";
+@import "bootstrap/input-groups";
+@import "bootstrap/navs";
+@import "bootstrap/alerts";
+@import "bootstrap/tooltip";
+@import "bootstrap/popovers";
+@import "bootstrap/utilities";
+@import "bootstrap/responsive-utilities";
+
+// The rest of Monk UI.
 @import "monk-ui/overrides";
 @import "monk-ui/theme";
