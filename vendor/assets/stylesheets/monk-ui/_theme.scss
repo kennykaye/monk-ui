@@ -125,6 +125,12 @@ body {
       @include box-shadow(none);
     }
   }
+
+  .form-group-shelf {
+    .checkbox {
+      color: $text-color;
+    }
+  }
 }
 
 @media (min-width: $screen-xs) {
