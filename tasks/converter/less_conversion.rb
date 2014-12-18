@@ -22,76 +22,89 @@ class Converter
     # match any brace that opens or closes a properties body
     BRACE_RE                    = /#{RULE_OPEN_BRACE_RE}|#{RULE_CLOSE_BRACE_RE}/m
     BRACE_RE_REVERSE            = /#{RULE_OPEN_BRACE_RE_REVERSE}|#{RULE_CLOSE_BRACE_RE_REVERSE}/m
-    # valid
+    # valid characters in mixin definitions
     SCSS_MIXIN_DEF_ARGS_RE      = /[\w\-,\s$:#%()]*/
     LESS_MIXIN_DEF_ARGS_RE      = /[\w\-,;.\s@:#%()]*/
 
-    # These mixins are nested (not supported by SCSS), and need to flattened:
+    # These mixins will get vararg definitions in SCSS (not supported by LESS):
     NESTED_MIXINS               = {'#gradient' => 'gradient'}
 
     # These mixins will get vararg definitions in SCSS (not supported by LESS):
     VARARG_MIXINS               = %w(
-    transition transition-duration transition-property transition-transform box-shadow
-  )
+      scale transition transition-duration transition-property transition-transform box-shadow
+    )
+
+    # A list of classes that will be extracted into mixins
+    # Only the top-level selectors of form .CLASS { ... } are extracted. CLASS must not be used in any other rule definition.
+    # This is a work-around for libsass @extend issues
+    CLASSES_TO_MIXINS = %w(
+      list-unstyled form-inline
+    )
 
     # Convert a snippet of bootstrap LESS to Scss
     def convert_less(less)
-      load_shared
       less = convert_to_scss(less)
       less = yield(less) if block_given?
       less
     end
 
-    def load_shared
+    def shared_mixins
       @shared_mixins ||= begin
         log_status '  Reading shared mixins from mixins.less'
-        read_mixins read_files('less', ['mixins.less'])['mixins.less'], nested: NESTED_MIXINS
+        CLASSES_TO_MIXINS + read_mixins(read_files('less', bootstrap_less_files.grep(/mixins\//)).values.join("\n"),
+                                        nested: NESTED_MIXINS)
       end
     end
 
     def process_stylesheet_assets
       log_status 'Processing stylesheets...'
-      files = read_files('less', bootstrap_less_files)
+      files   = read_files('less', bootstrap_less_files)
+      save_to = @save_to[:scss]
 
       log_status '  Converting LESS files to Scss:'
       files.each do |name, file|
         log_processing name
         # apply common conversions
         file = convert_less(file)
+        if name.start_with?('mixins/')
+          file = varargify_mixin_definitions(file, *VARARG_MIXINS)
+          %w(responsive-(in)?visibility input-size text-emphasis-variant bg-variant).each do |mixin|
+            file = parameterize_mixin_parent_selector file, mixin if file =~ /#{mixin}/
+          end
+          NESTED_MIXINS.each do |sel, name|
+            file = flatten_mixins(file, sel, name) if /#{Regexp.escape(sel)}/ =~ file
+          end
+          file = replace_all file, /(?<=[.-])\$state/, '#{$state}' if file =~ /[.-]\$state/
+        end
         case name
-          when 'mixins.less'
-            NESTED_MIXINS.each do |selector, prefix|
-              file = flatten_mixins(file, selector, prefix)
-            end
-            file = varargify_mixin_definitions(file, *VARARG_MIXINS)
-            file = deinterpolate_vararg_mixins(file)
-            %w(responsive-(in)?visibility input-size text-emphasis-variant bg-variant).each do |mixin|
-              file = parameterize_mixin_parent_selector file, mixin
-            end
-            file = replace_ms_filters(file)
-            file = replace_all file, /(?<=[.-])\$state/, '#{$state}'
+          when 'mixins/buttons.less'
+            file = replace_all file, /(\.dropdown-toggle)&/, '&\1'
+          when 'mixins/list-group.less'
             file = replace_rules(file, '  .list-group-item-') { |rule| extract_nested_rule rule, 'a&' }
-            file = replace_all file, /,\s*\.open \.dropdown-toggle& \{(.*?)\}/m,
-                               " {\\1}\n  .open & { &.dropdown-toggle {\\1} }"
-
-            # make +scale(one_argument) compatible with Sass list handling
-            # see https://github.com/twbs/bootstrap-sass/issues/518
-            file = replace_all file, '$ratio, $ratio-y', '$scale-args'
-
+          when 'mixins/gradients.less'
+            file = replace_ms_filters(file)
+            file = deinterpolate_vararg_mixins(file)
+          when 'mixins/vendor-prefixes.less'
+            # remove second scale mixins as this is handled via vararg in the first one
+            file = replace_rules(file, Regexp.escape('@mixin scale($ratioX, $ratioY...)')) { '' }
+          when 'mixins/grid-framework.less'
             file = convert_grid_mixins file
+          when 'component-animations.less'
+            file = extract_nested_rule file, "#{SELECTOR_RE}&\\.in"
           when 'responsive-utilities.less'
-            file = apply_mixin_parent_selector(file, '&\.(visible|hidden)')
-            file = apply_mixin_parent_selector(file, '(?<!&)\.(visible|hidden)')
-            file = replace_rules(file, '  @media') { |r| unindent(r, 2) }
+            file = apply_mixin_parent_selector file, '\.(?:visible|hidden)'
           when 'variables.less'
             file = insert_default_vars(file)
-            file = unindent <<-SCSS + file, 14
-              // a flag to toggle asset pipeline / compass integration
-              // defaults to true if twbs-font-path function is present (no function => twbs-font-path('') parsed as string == right side)
-              // in Sass 3.3 this can be improved with: function-exists(twbs-font-path)
-              $bootstrap-sass-asset-helper: (twbs-font-path("") != unquote('twbs-font-path("")')) !default;
+            file = unindent <<-SCSS + "\n" + file, 14
+              // When true, asset path helpers are used, otherwise the regular CSS `url()` is used.
+              // When there no function is defined, `fn('')` is parsed as string that equals the right hand side
+              // NB: in Sass 3.3 there is a native function: function-exists(twbs-font-path)
+              $bootstrap-sass-asset-helper: #{sass_fn_exists('twbs-font-path')} !default;
             SCSS
-            file = replace_all file, /(\$icon-font-path:).*(!default)/, '\1 "bootstrap/" \2'
+            file = replace_all file, %r{(\$icon-font-path): \s*"(.*)" (!default);}, "\n" + unindent(<<-SCSS, 14)
+              // [converter] Asset helpers such as Sprockets and Node.js Mincer do not resolve relative paths
+              \\1: if($bootstrap-sass-asset-helper, "bootstrap/", "\\2bootstrap/") \\3;
+            SCSS
           when 'close.less'
             # extract .close { button& {...} } rule
             file = extract_nested_rule file, 'button&'
@@ -105,10 +118,9 @@ class Converter
             file = replace_all file, /(\s*)\.navbar-(right|left)\s*\{\s*@extend\s*\.pull-(right|left);\s*/, "\\1.navbar-\\2 {\\1  float: \\2 !important;\\1"
           when 'tables.less'
             file = replace_all file, /(@include\s*table-row-variant\()(\w+)/, "\\1'\\2'"
-          when 'thumbnails.less'
+          when 'thumbnails.less', 'labels.less', 'badges.less'
             file = extract_nested_rule file, 'a&'
           when 'glyphicons.less'
-            file = replace_all file, /\#\{(url\(.*?\))}/, '\1'
             file = replace_rules(file, '@font-face') { |rule|
               rule = replace_all rule, /(\$icon-font(?:-\w+)+)/, '#{\1}'
               replace_asset_url rule, :font
@@ -119,79 +131,104 @@ class Converter
             file = replace_all(file, "  @include bg-variant($brand-primary);\n}", "}\n@include bg-variant('.bg-primary', $brand-primary);")
         end
 
-        name    = name.sub(/\.less$/, '.scss')
-        save_to = @save_to[:scss]
-        path    = "#{save_to}/#{'_' unless name == 'bootstrap.scss'}#{name}"
+        path = File.join save_to, name.sub(/\.less$/, '.scss')
+        path = File.join File.dirname(path), '_' + File.basename(path)
         save_file(path, file)
         log_processed File.basename(path)
       end
+
+      # move bootstrap/_bootstrap.scss to _bootstrap.scss adjusting import paths
+      main_from = "#{save_to}/_bootstrap.scss"
+      main_to   = File.expand_path("#{save_to}/../_bootstrap.scss")
+      save_file main_to, File.read(main_from).gsub(/ "/, ' "bootstrap/')
+      File.delete(main_from)
+
+      # generate variables template
+      save_file 'templates/project/_bootstrap-variables.sass',
+                "// Override Bootstrap variables here (defaults from bootstrap-sass v#{Bootstrap::VERSION}):\n\n" +
+                    File.read("#{save_to}/_variables.scss").gsub(/^(?=\$)/, '// ').gsub(/ !default;/, '')
     end
 
     def bootstrap_less_files
-      @bootstrap_less_files ||= get_paths_by_type('less', /\.less$/)
+      @bootstrap_less_files ||= get_paths_by_type('less', /\.less$/) +
+        get_paths_by_type('mixins', /\.less$/,
+                          get_tree(get_tree_sha('mixins', get_tree(get_tree_sha('less'))))).map { |p| "mixins/#{p}" }
     end
 
     # apply general less to scss conversion
     def convert_to_scss(file)
       # get local mixin names before converting the definitions
-      mixins = @shared_mixins + read_mixins(file)
+      mixins = shared_mixins + read_mixins(file)
       file   = replace_vars(file)
-      file   = replace_file_imports(file)
       file   = replace_mixin_definitions(file)
       file   = replace_mixins(file, mixins)
+      file   = extract_mixins_from_selectors(file, CLASSES_TO_MIXINS.inject({}) { |h, cl| h.update(".#{cl}" => cl) })
       file   = replace_spin(file)
+      file   = replace_fadein(file)
       file   = replace_image_urls(file)
       file   = replace_escaping(file)
       file   = convert_less_ampersand(file)
       file   = deinterpolate_vararg_mixins(file)
       file   = replace_calculation_semantics(file)
+      file   = replace_file_imports(file)
       file
+    end
+
+    def sass_fn_exists(fn)
+      %Q{(#{fn}("") != unquote('#{fn}("")'))}
     end
 
     def replace_asset_url(rule, type)
       replace_all rule, /url\((.*?)\)/, "url(if($bootstrap-sass-asset-helper, twbs-#{type}-path(\\1), \\1))"
     end
 
+    # convert recursively evaluated selector $list to @for loop
+    def mixin_all_grid_columns(css, selector: raise('pass class'), from: 1, to: raise('pass to'))
+      mxn_def = css.each_line.first.strip
+      # inject local variables as default arguments
+      # this is to avoid overwriting outer variables with the same name with Sass <= 3.3
+      # see also: https://github.com/twbs/bootstrap-sass/issues/636
+      locals = <<-SASS.strip
+        $i: #{from}, $list: "#{selector}"
+      SASS
+      mxn_def.sub!(/(\(?)(\)\s*\{)/) {  "#{$1}#{', ' if $1.empty?}#{locals}#{$2}" }
+      step_body = (css =~ /\$list \{\n(.*?)\n[ ]*\}/m) && $1
+<<-SASS
+// [converter] This is defined recursively in LESS, but Sass supports real loops
+#{mxn_def}
+  @for $i from (#{from} + 1) through #{to} {
+    $list: "\#{$list}, #{selector}";
+  }
+  \#{$list} {
+#{unindent step_body, 2}
+  }
+}
+SASS
+    end
+
     # convert grid mixins LESS when => SASS @if
     def convert_grid_mixins(file)
       file = replace_rules file, /@mixin make-grid-columns/, comments: false do |css, pos|
-        mxn_def = css.each_line.first
-        classes = if css =~ /-columns-float/
-                    '.col-#{$class}-#{$i}'
-                  else
-                    '.col-xs-#{$i}, .col-sm-#{$i}, .col-md-#{$i}, .col-lg-#{$i}'
-                  end
-        body = (css =~ /\$list \{\n(.*?)\n[ ]*\}/m) && $1
-        unindent <<-SASS, 8
-        // [converter] Grid converted to use SASS cycles (LESS uses recursive nested mixin defs not supported by SASS)
-        #{mxn_def.strip}
-          $list: '';
-          $i: 1;
-          $list: "#{classes}";
-          @for $i from 2 through $grid-columns {
-            $list: "#{classes}, \#{$list}";
-          }
-          \#{$list} {
-        #{unindent body}
-          }
-        }
-        SASS
+        mixin_all_grid_columns css, selector: '.col-xs-#{$i}, .col-sm-#{$i}, .col-md-#{$i}, .col-lg-#{$i}', to: '$grid-columns'
       end
-      file = replace_rules file, /@mixin calc-grid/ do |css|
-        css = indent css.gsub(/.*when (.*?) {/, '@if \1 {').gsub(/(?<=\$type) = (\w+)/, ' == \1').gsub(/(?<=-)(\$[a-z]+)/, '#{\1}')
+      file = replace_rules file, /@mixin float-grid-columns/, comments: false do |css, pos|
+        mixin_all_grid_columns css, selector: '.col-#{$class}-#{$i}', to: '$grid-columns'
+      end
+      file = replace_rules file, /@mixin calc-grid-column/ do |css|
+        css = indent css.gsub(/.*when (.*?) {/, '@if \1 {').gsub(/(\$[\w-]+)\s+=\s+(\w+)/, '\1 == \2').gsub(/(?<=-)(\$[a-z]+)/, '#{\1}')
         if css =~ /== width/
-          css = "@mixin calc-grid($index, $class, $type) {\n#{css}"
+          css = "@mixin calc-grid-column($index, $class, $type) {\n#{css}"
         elsif css =~ /== offset/
           css += "\n}"
         end
         css
       end
-      file = replace_rules file, /@mixin make-grid\(/ do |css|
+      file = replace_rules file, /@mixin loop-grid-columns/ do |css|
         unindent <<-SASS, 8
-        // [converter] This is defined recursively in LESS, but SASS supports real loops
-        @mixin make-grid($columns, $class, $type) {
+        // [converter] This is defined recursively in LESS, but Sass supports real loops
+        @mixin loop-grid-columns($columns, $class, $type) {
           @for $i from 0 through $columns {
-            @include calc-grid($i, $class, $type);
+            @include calc-grid-column($i, $class, $type);
           }
         }
         SASS
@@ -274,7 +311,7 @@ class Converter
 
     # @import "file.less" to "#{target_path}file;"
     def replace_file_imports(less, target_path = '')
-      less.gsub %r([@\$]import ["|']([\w-]+).less["|'];),
+      less.gsub %r([@\$]import ["|']([\w\-/]+).less["|'];),
                 %Q(@import "#{target_path}\\1";)
     end
 
@@ -296,7 +333,11 @@ class Converter
         # insert param into mixin def
         mxn_css.sub!(/(@mixin [\w-]+)\(([\$\w\-,\s]*)\)/) { "#{$1}(#{param}#{', ' if $2 && !$2.empty?}#{$2})" }
         # wrap properties in #{$parent} { ... }
-        replace_properties(mxn_css) { |props| props.strip.empty? ? props : "  \#{#{param}} { #{props.strip} }\n  " }
+        replace_properties(mxn_css) { |props|
+          next props if props.strip.empty?
+          spacer = ' ' * indent_width(props)
+          "#{spacer}\#{#{param}} {\n#{indent(props.sub(/\s+\z/, ''), 2)}\n#{spacer}}"
+        }
         # change nested& rules to nested#{$parent}
         replace_rules(mxn_css, /.*&[ ,:]/) { |rule| replace_in_selector rule, /&/, "\#{#{param}}" }
       end
@@ -311,15 +352,15 @@ class Converter
       matches = []
       # first find the rules, and remove them
       file    = replace_rules(file, "\s*#{selector}", comments: true) { |rule, pos, css|
-        matches << [rule, pos]
-        new_selector ||= "#{get_selector(rule).gsub(/&/, selector_for_pos(css, pos.begin))}"
-        indent "// [converter] extracted #{get_selector(rule)} to #{new_selector}".tr("\n", ' ').squeeze(' '), indent_width(rule)
+        new_sel = new_selector || "#{get_selector(rule).gsub(/&/, selector_for_pos(css, pos.begin))}"
+        matches << [rule, pos, new_sel]
+        indent "// [converter] extracted #{get_selector(rule)} to #{new_sel}".tr("\n", ' ').squeeze(' '), indent_width(rule)
       }
       raise "extract_nested_rule: no such selector: #{selector}" if matches.empty?
-      log_transform selector, new_selector
       # replace rule selector with new_selector
       matches.each do |m|
-        m[0].sub! /(#{COMMENT_RE}*)^(\s*).*?(\s*){/m, "\\1\\2#{new_selector}\\3{"
+        m[0].sub! /(#{COMMENT_RE}*)^(\s*).*?(\s*){/m, "\\1\\2#{m[2]}\\3{"
+        log_transform selector, m[2]
       end
       replace_substrings_at file,
                             matches.map { |_, pos| close_brace_pos(file, pos.begin, 1) + 1 },
@@ -334,7 +375,7 @@ class Converter
       replace_rules file, '\s*' + rule_sel, comments: false do |rule, rule_pos, css|
         body = unwrap_rule_block(rule.dup).strip
         next rule unless body =~ /^@include \w+/m || body =~ /^@media/ && body =~ /\{\s*@include/
-        rule =~ /(#{COMMENT_RE}*)([#{SELECTOR_CHAR}]+?)\s*#{RULE_OPEN_BRACE_RE}/
+        rule =~ /(#{COMMENT_RE}*)([#{SELECTOR_CHAR}\s*]+?)#{RULE_OPEN_BRACE_RE}/
         cmt, sel = $1, $2.strip
         # take one up selector chain if this is an &. selector
         if sel.start_with?('&')
@@ -342,8 +383,9 @@ class Converter
           sel        = parent_sel + sel[1..-1]
         end
         # unwrap, and replace @include
-        unindent unwrap_rule_block(rule).gsub(/(@include [\w-]+)\(([\$\w\-,\s]*)\)/) {
-          "#{cmt}#{$1}('#{sel}'#{', ' if $2 && !$2.empty?}#{$2})"
+        unindent unwrap_rule_block(rule).gsub(/(@include [\w-]+)\(?([\$\w\-,\s]*)\)?/) {
+          args = $2
+          "#{cmt}#{$1}('#{sel.gsub(/\s+/, ' ')}'#{', ' if args && !args.empty?}#{args})"
         }
       end
     end
@@ -358,6 +400,25 @@ class Converter
       end
     end
 
+    # .btn { ... } -> @mixin btn { ... }; .btn { @include btn }
+    def extract_mixins_from_selectors(file, selectors_to_mixins)
+      selectors_to_mixins.each do |selector, mixin|
+        file = replace_rules file, Regexp.escape(selector), prefix: false do |selector_css|
+          log_transform "#{selector} { ... } -> @mixin #{mixin} { ... }; #{selector} { @include #{mixin} } ", from: 'extract_mixins_from_selectors'
+          <<-SCSS
+// [converter] extracted from `#{selector}` for libsass compatibility
+@mixin #{mixin} {#{unwrap_rule_block(selector_css)}
+}
+// [converter] extracted as `@mixin #{mixin}` for libsass compatibility
+#{selector} {
+  @include #{mixin};
+}
+          SCSS
+        end
+      end
+      file
+    end
+
     # @include and @extend from LESS:
     #  .mixin()             -> @include mixin()
     #  #scope > .mixin()    -> @include scope-mixin()
@@ -366,25 +427,22 @@ class Converter
       mixin_pattern = /(\s+)(([#|\.][\w-]+\s*>\s*)*)\.([\w-]+\(.*\))(?!\s\{)/
 
       less = less.gsub(mixin_pattern) do |match|
-        matches = match.scan(mixin_pattern).flatten
-        scope   = matches[1] || ''
-        if scope != ''
-          scope = scope.scan(/[\w-]+/).join('-') + '-'
-        end
+        matches    = match.scan(mixin_pattern).flatten
+        scope      = matches[1] && matches[1] != '' ? matches[1].scan(/[\w-]+/).join('-') + '-' : ''
         mixin_name = match.scan(/\.([\w-]+)\(.*\)\s?\{?/).first
         if mixin_name && mixin_names.include?("#{scope}#{mixin_name.first}")
-          "#{matches.first}@include #{scope}#{matches.last}".gsub(/; \$/, ", $").sub(/;\)$/, ')')
+          "#{matches.first}@include #{scope}#{matches.last.gsub(/;\s*\$/, ', $').sub(/;\)$/, ')').sub(/\(\)$/, '')}"
         else
           "#{matches.first}@extend .#{scope}#{matches.last.gsub(/\(\)/, '')}"
         end
       end
 
-      less.gsub /&:extend\((#{SELECTOR_RE}) all\)/ do
+      less.gsub /&:extend\((#{SELECTOR_RE})(?: all)?\)/ do
         selector = $1
         selector =~ /\.([\w-]+)/
         mixin    = $1
         if mixin && mixin_names.include?(mixin)
-          "@include #{mixin}()"
+          "@include #{mixin}"
         else
           "@extend #{selector}"
         end
@@ -428,6 +486,10 @@ class Converter
 
     def replace_spin(less)
       less.gsub(/(?![\-$@.])spin(?!-)/, 'adjust-hue')
+    end
+
+    def replace_fadein(less)
+      less.gsub(/(?![\-$@.])fadein\((.*?),\s*(.*?)%\)/) { "fade_in(#{$1}, #{$2.to_i / 100.0})" }
     end
 
     def replace_image_urls(less)
@@ -478,11 +540,14 @@ class Converter
     # to:
     # @mixin transition($transition...) {
     def varargify_mixin_definitions(scss, *mixins)
-      log_transform *mixins
       scss = scss.dup
+      replaced = []
       mixins.each do |mixin|
-        scss.gsub! /(@mixin\s*#{Regexp.quote(mixin)})\((#{SCSS_MIXIN_DEF_ARGS_RE})\)/, '\1(\2...)'
+        if scss.gsub! /(@mixin\s*#{Regexp.quote(mixin)})\((#{SCSS_MIXIN_DEF_ARGS_RE})\)/, '\1(\2...)'
+          replaced << mixin
+        end
       end
+      log_transform *replaced unless replaced.empty?
       scss
     end
 
@@ -501,7 +566,8 @@ class Converter
 
     # get full selector for rule_block
     def get_selector(rule_block)
-      /^\s*(#{SELECTOR_RE}?)\s*\{/.match(rule_block) && $1 && $1.strip
+      sel = /^\s*(#{SELECTOR_RE}?)\s*\{/.match(rule_block) && $1 && $1.strip
+      sel.sub /\s*\{\n\s.*/m, ''
     end
 
     # replace CSS rule blocks matching rule_prefix with yield(rule_block, rule_pos)
@@ -510,16 +576,20 @@ class Converter
     # option :comments -- include immediately preceding comments in rule_block
     #
     # replace_rules(".a{ \n .b{} }", '.b') { |rule, pos| ">#{rule}<"  } #=> ".a{ \n >.b{}< }"
-    def replace_rules(less, rule_prefix = SELECTOR_RE, options = {}, &block)
-      options = {comments: true}.merge(options || {})
-      less    = less.dup
-      s       = CharStringScanner.new(less)
-      rule_re = /(?:#{rule_prefix}[#{SELECTOR_CHAR})=(\s]*?#{RULE_OPEN_BRACE_RE})/
-      if options[:comments]
-        rule_start_re = /(?:#{COMMENT_RE}*)^#{rule_re}/
-      else
-        rule_start_re = /^#{rule_re}/
-      end
+    def replace_rules(less, selector = SELECTOR_RE, options = {}, &block)
+      options       = {prefix: true, comments: true}.merge(options || {})
+      less          = less.dup
+      s             = CharStringScanner.new(less)
+      rule_re       = if options[:prefix]
+                        /(?:#{selector}[#{SELECTOR_CHAR})=(\s]*?#{RULE_OPEN_BRACE_RE})/
+                      else
+                        /#{selector}[\s]*#{RULE_OPEN_BRACE_RE}/
+                      end
+      rule_start_re = if options[:comments]
+                        /(?:#{COMMENT_RE}*)^#{rule_re}/
+                      else
+                        /^#{rule_re}/
+                      end
 
       positions = []
       while (rule_start = s.scan_next(rule_start_re))
@@ -568,21 +638,10 @@ class Converter
     def replace_properties(css, &block)
       s = CharStringScanner.new(css)
       s.skip_until /#{RULE_OPEN_BRACE_RE}\n?/
-      prev_pos = s.pos
-      depth    = 0
-      pos      = []
-      while (b = s.scan_next(/#{SELECTOR_RE}#{RULE_OPEN_BRACE_RE}|#{RULE_CLOSE_BRACE_RE}/m))
-        s_pos = s.pos
-        depth += (b == '}' ? -1 : +1)
-        if depth == 1
-          if b == '}'
-            prev_pos = s_pos
-          else
-            pos << (prev_pos .. s_pos - b.length - 1)
-          end
-        end
-      end
-      replace_substrings_at css, pos, &block
+      from = s.pos
+      m = s.scan_next(/\s*#{SELECTOR_RE}#{RULE_OPEN_BRACE_RE}/) || s.scan_next(/\s*#{RULE_CLOSE_BRACE_RE}/)
+      to = s.pos - m.length - 1
+      replace_substrings_at css, [(from .. to)], &block
     end
 
 
