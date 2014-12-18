@@ -12,7 +12,7 @@ Usage
 gem 'bootstrap-sass', github: 'MonkDev/monk-ui', branch: 'master'
 ```
 
-```sass
+```scss
 @import "bootstrap-sprockets";
 @import "your/application/variables";
 @import "monk-ui";
